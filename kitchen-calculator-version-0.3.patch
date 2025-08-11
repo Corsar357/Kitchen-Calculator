@@ -1,0 +1,503 @@
+diff --git a/kitchen-calculator.php b/kitchen-calculator.php
+index 1234567..89abcde 100644
+--- a/kitchen-calculator.php
++++ b/kitchen-calculator.php
+@@ -1,10 +1,20 @@
+ <?php
+ /**
+  * Plugin Name: Kitchen Calculator
+- * Description: A simple calculator for kitchen dimensions and requirements.
++ * Description: A calculator for kitchen recipes with portion control
+  * Version: 0.3
+  * Author: Your Name
+  */
+ 
++// Захист від прямого доступу
++if (!defined('ABSPATH')) {
++    exit;
++}
++
++define('KC_PLUGIN_DIR', plugin_dir_path(__FILE__));
++define('KC_PLUGIN_URL', plugin_dir_url(__FILE__));
++
++// Підключаємо необхідні файли
++require_once KC_PLUGIN_DIR . 'includes/database.php';
++require_once KC_PLUGIN_DIR . 'includes/blocks.php';
++require_once KC_PLUGIN_DIR . 'includes/save-handler.php';
++
+ // Prevent direct access
+ if (!defined('ABSPATH')) {
+     exit;
+@@ -20,6 +30,15 @@
+ // Activation hook
+ register_activation_hook(__FILE__, 'kitchen_calculator_activate');
+ 
++// Активація плагіна
++register_activation_hook(__FILE__, 'kc_activate');
++function kc_activate() {
++    kc_create_database_tables();
++}
++
++// Деактивація плагіна
++register_deactivation_hook(__FILE__, 'kc_deactivate');
++function kc_deactivate() {
++    // Тут можна додати очищення при деактивації
++}
++
+ function kitchen_calculator_activate() {
+     // Create options with default values
+     add_option('kitchen_calculator_base_price', 1000);
+@@ -40,6 +59,15 @@
+ add_action('init', 'kitchen_calculator_init');
+ 
+ function kitchen_calculator_init() {
++    // Реєстрація блоків
++    add_action('enqueue_block_editor_assets', 'kc_enqueue_block_editor_assets');
++    add_action('wp_enqueue_scripts', 'kc_enqueue_frontend_scripts');
++    
++    // Хук для збереження постів
++    add_action('save_post', 'kc_save_recipe_ingredients', 10, 3);
++    
++    // Оригінальний функціонал
++    
+     // Register shortcode
+     add_shortcode('kitchen_calculator', 'kitchen_calculator_shortcode');
+     
+diff --git a/includes/database.php b/includes/database.php
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/includes/database.php
+@@ -0,0 +1,56 @@
++<?php
++if (!defined('ABSPATH')) {
++    exit;
++}
++
++function kc_create_database_tables() {
++    global $wpdb;
++    
++    $table_name = $wpdb->prefix . 'kc_recipe_ingredients';
++    
++    $charset_collate = $wpdb->get_charset_collate();
++    
++    $sql = "CREATE TABLE $table_name (
++        id mediumint(9) NOT NULL AUTO_INCREMENT,
++        recipe_post_id bigint(20) NOT NULL,
++        ingredient_id bigint(20) NOT NULL,
++        amount decimal(10,4) NOT NULL,
++        unit_text varchar(50) NOT NULL,
++        PRIMARY KEY (id),
++        KEY recipe_post_id (recipe_post_id),
++        KEY ingredient_id (ingredient_id)
++    ) $charset_collate;";
++    
++    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
++    dbDelta($sql);
++}
++
++function kc_save_recipe_ingredients_data($recipe_post_id, $ingredients_data) {
++    global $wpdb;
++    
++    $table_name = $wpdb->prefix . 'kc_recipe_ingredients';
++    
++    // Очищуємо старі дані для цього рецепта
++    $wpdb->delete($table_name, array('recipe_post_id' => $recipe_post_id));
++    
++    // Зберігаємо нові дані
++    foreach ($ingredients_data as $ingredient) {
++        $wpdb->insert(
++            $table_name,
++            array(
++                'recipe_post_id' => $recipe_post_id,
++                'ingredient_id' => $ingredient['ingredient_id'],
++                'amount' => $ingredient['amount'],
++                'unit_text' => $ingredient['unit_text']
++            ),
++            array('%d', '%d', '%f', '%s')
++        );
++    }
++}
++
++function kc_get_recipe_ingredients($recipe_post_id) {
++    global $wpdb;
++    
++    $table_name = $wpdb->prefix . 'kc_recipe_ingredients';
++    
++    return $wpdb->get_results($wpdb->prepare(
++        "SELECT * FROM $table_name WHERE recipe_post_id = %d",
++        $recipe_post_id
++    ));
++}
+diff --git a/includes/blocks.php b/includes/blocks.php
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/includes/blocks.php
+@@ -0,0 +1,35 @@
++<?php
++if (!defined('ABSPATH')) {
++    exit;
++}
++
++function kc_enqueue_block_editor_assets() {
++    wp_enqueue_script(
++        'kc-blocks',
++        KC_PLUGIN_URL . 'assets/js/blocks.js',
++        array('wp-blocks', 'wp-element', 'wp-editor', 'wp-components'),
++        '0.3',
++        true
++    );
++    
++    wp_enqueue_style(
++        'kc-blocks-editor',
++        KC_PLUGIN_URL . 'assets/css/editor.css',
++        array(),
++        '0.3'
++    );
++}
++
++function kc_enqueue_frontend_scripts() {
++    wp_enqueue_script(
++        'kc-frontend',
++        KC_PLUGIN_URL . 'assets/js/frontend.js',
++        array('wp-element'),
++        '0.3',
++        true
++    );
++    
++    wp_enqueue_style(
++        'kc-frontend',
++        KC_PLUGIN_URL . 'assets/css/frontend.css',
++        array(),
++        '0.3'
++    );
++}
+diff --git a/includes/save-handler.php b/includes/save-handler.php
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/includes/save-handler.php
+@@ -0,0 +1,65 @@
++<?php
++if (!defined('ABSPATH')) {
++    exit;
++}
++
++function kc_save_recipe_ingredients($post_id, $post, $update) {
++    // Перевірка автозбереження
++    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
++        return;
++    }
++    
++    // Перевірка прав доступу
++    if (!current_user_can('edit_post', $post_id)) {
++        return;
++    }
++    
++    // Перевірка типу поста (припустимо, що рецепти - це пости типу 'recipe')
++    if ($post->post_type !== 'post' && $post->post_type !== 'recipe') {
++        return;
++    }
++    
++    // Отримуємо блоки з поста
++    $blocks = parse_blocks($post->post_content);
++    
++    $ingredients_data = array();
++    
++    foreach ($blocks as $block) {
++        if ($block['blockName'] === 'kc/recipe-ingredients') {
++            // Парсимо дані з блоку інгредієнтів
++            $ingredients_data = kc_parse_ingredients_block($block);
++            break;
++        }
++    }
++    
++    // Зберігаємо дані в базу
++    if (!empty($ingredients_data)) {
++        kc_save_recipe_ingredients_data($post_id, $ingredients_data);
++    }
++}
++
++function kc_parse_ingredients_block($block) {
++    $ingredients_data = array();
++    
++    // Припустимо, що блок містить список інгредієнтів
++    // Це потрібно буде адаптувати залежно від структури блоку
++    if (isset($block['attrs']['ingredients'])) {
++        foreach ($block['attrs']['ingredients'] as $ingredient) {
++            // Шукаємо інгредієнт по slug
++            $ingredient_post = get_page_by_path($ingredient['slug'], OBJECT, 'ingredient');
++            
++            if ($ingredient_post) {
++                $ingredients_data[] = array(
++                    'ingredient_id' => $ingredient_post->ID,
++                    'amount' => floatval($ingredient['amount']),
++                    'unit_text' => sanitize_text_field($ingredient['unit'])
++                );
++            }
++        }
++    }
++    
++    return $ingredients_data;
++}
+diff --git a/assets/js/blocks.js b/assets/js/blocks.js
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/assets/js/blocks.js
+@@ -0,0 +1,150 @@
++(function(wp) {
++    var el = wp.element.createElement;
++    var registerBlockType = wp.blocks.registerBlockType;
++    var RichText = wp.blockEditor.RichText;
++    var InspectorControls = wp.blockEditor.InspectorControls;
++    var PanelBody = wp.components.PanelBody;
++    var TextControl = wp.components.TextControl;
++    var Button = wp.components.Button;
++    
++    // Блок інгредієнтів
++    registerBlockType('kc/recipe-ingredients', {
++        title: 'Recipe Ingredients',
++        icon: 'carrot',
++        category: 'widgets',
++        attributes: {
++            ingredients: {
++                type: 'array',
++                default: []
++            }
++        },
++        edit: function(props) {
++            var ingredients = props.attributes.ingredients || [];
++            
++            function addIngredient() {
++                var newIngredients = [...ingredients];
++                newIngredients.push({
++                    slug: '',
++                    amount: 1,
++                    unit: 'шт'
++                });
++                props.setAttributes({ ingredients: newIngredients });
++            }
++            
++            function updateIngredient(index, field, value) {
++                var newIngredients = [...ingredients];
++                newIngredients[index][field] = value;
++                props.setAttributes({ ingredients: newIngredients });
++            }
++            
++            function removeIngredient(index) {
++                var newIngredients = [...ingredients];
++                newIngredients.splice(index, 1);
++                props.setAttributes({ ingredients: newIngredients });
++            }
++            
++            return el('div', { className: props.className },
++                el('h3', {}, 'Recipe Ingredients'),
++                ingredients.map(function(ingredient, index) {
++                    return el('div', { key: index, style: { marginBottom: '10px', padding: '10px', border: '1px solid #ccc' } },
++                        el(TextControl, {
++                            label: 'Ingredient Slug',
++                            value: ingredient.slug,
++                            onChange: function(value) {
++                                updateIngredient(index, 'slug', value);
++                            }
++                        }),
++                        el(TextControl, {
++                            label: 'Amount',
++                            type: 'number',
++                            value: ingredient.amount,
++                            onChange: function(value) {
++                                updateIngredient(index, 'amount', parseFloat(value) || 0);
++                            }
++                        }),
++                        el(TextControl, {
++                            label: 'Unit',
++                            value: ingredient.unit,
++                            onChange: function(value) {
++                                updateIngredient(index, 'unit', value);
++                            }
++                        }),
++                        el(Button, {
++                            isDestructive: true,
++                            onClick: function() {
++                                removeIngredient(index);
++                            }
++                        }, 'Remove')
++                    );
++                }),
++                el(Button, {
++                    isPrimary: true,
++                    onClick: addIngredient
++                }, 'Add Ingredient')
++            );
++        },
++        save: function(props) {
++            var ingredients = props.attributes.ingredients || [];
++            
++            return el('div', { className: 'kc-recipe-ingredients' },
++                el('ul', {},
++                    ingredients.map(function(ingredient, index) {
++                        return el('li', { key: index },
++                            ingredient.amount + ' ' + ingredient.unit + ' ' + ingredient.slug
++                        );
++                    })
++                )
++            );
++        }
++    });
++    
++    // Блок контролера порцій
++    registerBlockType('kc/portion-controller', {
++        title: 'Portion Controller',
++        icon: 'groups',
++        category: 'widgets',
++        edit: function(props) {
++            return el('div', { className: props.className + ' kc-portion-controller' },
++                el('h3', {}, 'Portion Controller'),
++                el('div', { className: 'kc-portions' },
++                    el(Button, { 
++                        className: 'kc-portion-btn',
++                        variant: 'primary'
++                    }, '1x'),
++                    el(Button, { 
++                        className: 'kc-portion-btn',
++                        variant: 'secondary'
++                    }, '2x'),
++                    el(Button, { 
++                        className: 'kc-portion-btn',
++                        variant: 'secondary'
++                    }, '3x')
++                )
++            );
++        },
++        save: function(props) {
++            return el('div', { className: 'kc-portion-controller' },
++                el('div', { className: 'kc-portions' },
++                    el('button', { 
++                        className: 'kc-portion-btn',
++                        'data-multiplier': '1'
++                    }, '1x'),
++                    el('button', { 
++                        className: 'kc-portion-btn',
++                        'data-multiplier': '2'
++                    }, '2x'),
++                    el('button', { 
++                        className: 'kc-portion-btn',
++                        'data-multiplier': '3'
++                    }, '3x')
++                )
++            );
++        }
++    });
++})(window.wp);
+diff --git a/assets/js/frontend.js b/assets/js/frontend.js
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/assets/js/frontend.js
+@@ -0,0 +1,45 @@
++document.addEventListener('DOMContentLoaded', function() {
++    // Обробка кліків по кнопках порцій
++    document.querySelectorAll('.kc-portion-btn').forEach(function(button) {
++        button.addEventListener('click', function() {
++            var multiplier = parseFloat(this.getAttribute('data-multiplier')) || 1;
++            
++            // Знаходимо батьківський контейнер рецепта
++            var recipeContainer = this.closest('.wp-block-kc-recipe-ingredients') || 
++                                 document.querySelector('.kc-recipe-ingredients');
++            
++            if (recipeContainer) {
++                // Оновлюємо всі інгредієнти
++                var ingredientItems = recipeContainer.querySelectorAll('li');
++                ingredientItems.forEach(function(item) {
++                    var text = item.textContent;
++                    // Тут потрібно реалізувати логіку множення
++                    // Це базова реалізація - потрібно адаптувати залежно від формату
++                    var newText = kc_multiplyIngredientAmount(text, multiplier);
++                    item.textContent = newText;
++                });
++            }
++        });
++    });
++});
++
++function kc_multiplyIngredientAmount(text, multiplier) {
++    // Проста реалізація - потрібно адаптувати залежно від формату тексту
++    // Припустимо формат: "2 шт яйця"
++    var match = text.match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
++    if (match) {
++        var amount = parseFloat(match[1]);
++        var rest = match[2];
++        var newAmount = amount * multiplier;
++        return newAmount + ' ' + rest;
++    }
++    return text;
++}
+diff --git a/assets/css/editor.css b/assets/css/editor.css
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/assets/css/editor.css
+@@ -0,0 +1,15 @@
++.kc-portion-controller {
++    padding: 20px;
++    border: 1px solid #e0e0e0;
++    background: #f9f9f9;
++}
++
++.kc-portions {
++    display: flex;
++    gap: 10px;
++    margin-top: 10px;
++}
++
++.kc-portion-btn {
++    min-width: 60px;
++}
+diff --git a/assets/css/frontend.css b/assets/css/frontend.css
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/assets/css/frontend.css
+@@ -0,0 +1,35 @@
++.kc-portion-controller {
++    margin: 20px 0;
++    text-align: center;
++}
++
++.kc-portions {
++    display: flex;
++    justify-content: center;
++    gap: 10px;
++    margin-top: 10px;
++}
++
++.kc-portion-btn {
++    padding: 8px 16px;
++    border: 1px solid #ddd;
++    background: #f8f8f8;
++    cursor: pointer;
++    border-radius: 4px;
++    font-size: 14px;
++}
++
++.kc-portion-btn:hover {
++    background: #e0e0e0;
++}
++
++.kc-portion-btn[data-multiplier="1"] {
++    background: #0073aa;
++    color: white;
++    border-color: #005a87;
++}
++
++.kc-recipe-ingredients ul {
++    list-style: none;
++    padding: 0;
++}
++
++.kc-recipe-ingredients li {
++    padding: 5px 0;
++    border-bottom: 1px solid #eee;
++}
