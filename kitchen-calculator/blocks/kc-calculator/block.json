@@ -1,0 +1,19 @@
+{
+  "apiVersion": 2,
+  "name": "kc/calculator",
+  "title": "Kitchen Calculator",
+  "category": "widgets",
+  "icon": "calculator",
+  "description": "Конвертер кулінарних мір.",
+  "attributes": {
+    "defaultIngredient": { "type": "string", "default": "semolina" },
+    "defaultFromUnit":   { "type": "string", "default": "glass200" },
+    "defaultToUnit":     { "type": "string", "default": "g" },
+    "precision":         { "type": "number", "default": 2 }
+  },
+  "editorScript": "kc-calculator-block",
+  "viewScript":   "kc-calculator-frontend",
+  "editorStyle":  "file:./style.css",
+  "style":        "file:./style.css",
+  "render":       "kc_render_calculator_block"
+}
